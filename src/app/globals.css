@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tiptap Editor Styles */
+.tiptap {
+  outline: none;
+  min-height: 250px;
+}
+
+.tiptap p {
+  margin-bottom: 0.75rem;
+  line-height: 1.6;
+}
+
+.tiptap p:last-child {
+  margin-bottom: 0;
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  color: #9ca3af;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.tiptap ul,
+.tiptap ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.tiptap ul {
+  list-style-type: disc;
+}
+
+.tiptap ol {
+  list-style-type: decimal;
+}
+
+.tiptap li {
+  margin-bottom: 0.25rem;
+}
+
+.tiptap strong {
+  font-weight: 600;
+}
+
+.tiptap em {
+  font-style: italic;
+}
+
+.tiptap s {
+  text-decoration: line-through;
+}
+
+.tiptap::selection,
+.tiptap *::selection {
+  background-color: #bfdbfe;
+}
+
+.diff-added {
+  background-color: #d4edda;
+  text-decoration: none;
+}
+
+.diff-removed {
+  background-color: #f8d7da;
+  text-decoration: line-through;
+}
