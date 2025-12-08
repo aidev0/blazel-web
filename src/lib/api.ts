@@ -314,6 +314,18 @@ export async function getDraft(draftId: string): Promise<DraftDetail> {
   return response.json();
 }
 
+export async function deleteDraft(draftId: string): Promise<{ status: string; draft_id: string; feedback_deleted: number }> {
+  const response = await fetch(`${API_URL}/drafts/${draftId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to delete draft');
+  }
+  return response.json();
+}
+
 
 // ============== Adapter/Training API ==============
 
