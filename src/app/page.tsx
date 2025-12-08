@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Editor, { InlineComment } from '@/components/Editor';
 import DiffViewer from '@/components/DiffViewer';
 import Landing from '@/components/Landing';
+import TrainingPanel from '@/components/TrainingPanel';
 import {
   generatePost,
   submitFeedback,
@@ -448,6 +449,16 @@ export default function Home() {
                 </div>
               )}
             </div>
+
+            {/* Training Panel for Admins */}
+            {user.is_admin && selectedCustomerId && (
+              <TrainingPanel
+                customerId={selectedCustomerId}
+                customerName={customers.find(c => c.customer_id === selectedCustomerId)?.first_name ||
+                             customers.find(c => c.customer_id === selectedCustomerId)?.email}
+                onStatusChange={setStatus}
+              />
+            )}
 
           </div>
 

@@ -313,3 +313,115 @@ export async function getDraft(draftId: string): Promise<DraftDetail> {
   if (!response.ok) throw new Error('Failed to fetch draft');
   return response.json();
 }
+
+
+// ============== Adapter/Training API ==============
+
+export interface Adapter {
+  id: string;
+  customer_id: string;
+  version: number;
+  gcs_url: string;
+  is_active: boolean;
+  epochs: number;
+  training_samples: number;
+  created_at: string;
+}
+
+export interface TrainingData {
+  customer_id: string;
+  count: number;
+  examples: {
+    id: string;
+    input: string;
+    output: string;
+    original: string;
+    rating?: string;
+    created_at: string;
+  }[];
+}
+
+export interface AdapterTrainRequest {
+  customer_id: string;
+  epochs?: number;
+  learning_rate?: number;
+  lora_r?: number;
+  lora_alpha?: number;
+}
+
+export interface AdapterTrainResponse {
+  job_id: string;
+  status: string;
+  customer_id: string;
+  feedback_count: number;
+  message: string;
+}
+
+export interface TrainingJobStatus {
+  job_id: string;
+  status: string;
+  customer_id: string;
+  progress?: string;
+  adapter_path?: string;
+  error?: string;
+}
+
+export async function getTrainingData(customerId: string): Promise<TrainingData> {
+  const response = await fetch(`${API_URL}/adapters/training-data/${encodeURIComponent(customerId)}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to fetch training data');
+  return response.json();
+}
+
+export async function trainAdapter(request: AdapterTrainRequest): Promise<AdapterTrainResponse> {
+  const response = await fetch(`${API_URL}/adapters/train`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Training failed to start');
+  }
+  return response.json();
+}
+
+export async function getAdapters(customerId?: string): Promise<{ adapters: Adapter[] }> {
+  const url = customerId
+    ? `${API_URL}/adapters?customer_id=${encodeURIComponent(customerId)}`
+    : `${API_URL}/adapters`;
+  const response = await fetch(url, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to fetch adapters');
+  return response.json();
+}
+
+export async function getActiveAdapter(customerId: string): Promise<{ adapter: Adapter | null }> {
+  const response = await fetch(`${API_URL}/adapters/active/${encodeURIComponent(customerId)}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to fetch active adapter');
+  return response.json();
+}
+
+export async function activateAdapter(adapterId: string): Promise<{ status: string; message: string }> {
+  const response = await fetch(`${API_URL}/adapters/${adapterId}/activate`, {
+    method: 'PUT',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to activate adapter');
+  }
+  return response.json();
+}
+
+export async function getTrainingJobStatus(jobId: string): Promise<TrainingJobStatus> {
+  const response = await fetch(`${API_URL}/training-jobs/${jobId}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to fetch job status');
+  return response.json();
+}
