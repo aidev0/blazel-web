@@ -7,11 +7,11 @@ import Landing from '@/components/Landing';
 import {
   generatePost,
   submitFeedback,
-  triggerTraining,
   checkHealth,
   getDrafts,
+  getDraftsForCustomer,
   getDraft,
-  GenerateResponse,
+  getCustomers,
   setToken,
   getCurrentUser,
   login,
@@ -19,11 +19,16 @@ import {
   User,
   Draft,
   DraftDetail,
+  Customer,
 } from '@/lib/api';
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // Customers (for admins)
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   // Drafts list
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -48,7 +53,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [apiHealth, setApiHealth] = useState<string>('checking...');
-  const [showDiff, setShowDiff] = useState(false);
+  const [showDiff, setShowDiff] = useState(true);
 
   // Handle auth callback and check auth state
   useEffect(() => {
@@ -75,12 +80,50 @@ export default function Home() {
     handleAuth();
   }, []);
 
-  // Load drafts when user is authenticated
+  // Load drafts and customers when user changes
   useEffect(() => {
     if (user) {
-      loadDrafts();
+      // Admins load customers first, then drafts will load when customer is selected
+      if (user.is_admin) {
+        loadCustomers();
+      } else {
+        // Regular users just load their own drafts
+        loadDrafts();
+      }
     }
   }, [user]);
+
+  // When customer selection changes (for admins), load that customer's drafts
+  useEffect(() => {
+    if (user?.is_admin && selectedCustomerId) {
+      loadDraftsForCustomer(selectedCustomerId);
+    }
+  }, [selectedCustomerId, user?.is_admin]);
+
+  const loadCustomers = async () => {
+    try {
+      const response = await getCustomers();
+      setCustomers(response.customers);
+      // Auto-select first customer if available
+      if (response.customers.length > 0) {
+        setSelectedCustomerId(response.customers[0].customer_id);
+      }
+    } catch (error: any) {
+      setStatus(`Error loading customers: ${error.message}`);
+    }
+  };
+
+  const loadDraftsForCustomer = async (customerId: string) => {
+    setDraftsLoading(true);
+    try {
+      const response = await getDraftsForCustomer(customerId);
+      setDrafts(response.drafts);
+    } catch (error: any) {
+      setStatus(`Error loading drafts: ${error.message}`);
+    } finally {
+      setDraftsLoading(false);
+    }
+  };
 
   useEffect(() => {
     checkHealth()
@@ -140,27 +183,48 @@ export default function Home() {
       return;
     }
 
+    // For admins, require a customer selection
+    if (user?.is_admin && !selectedCustomerId) {
+      setStatus('Please select a customer first');
+      return;
+    }
+
     setLoading(true);
     setStatus(`Generating ${variations} variation${variations > 1 ? 's' : ''}...`);
 
+    // Use selected customer for admins, otherwise use user's own customer_id
+    const targetCustomerId = user?.is_admin ? selectedCustomerId : (user?.customer_id || user?.workos_user_id);
+
     try {
-      const response: GenerateResponse = await generatePost({
+      const response = await generatePost({
         topic,
         context: context || undefined,
         variations,
+        customer_id: targetCustomerId || undefined,
       });
 
-      // Reload drafts and select the first one
-      await loadDrafts();
-      if (response.drafts.length > 0) {
-        await handleSelectDraft(response.drafts[0].draft_id);
-      }
+      // Add all drafts to the list
+      const newDrafts: Draft[] = response.drafts.map((d) => ({
+        id: d.draft_id,
+        customer_id: targetCustomerId || '',
+        topic,
+        text: d.text,
+        created_at: new Date().toISOString(),
+        has_feedback: false,
+        temperature: d.temperature,
+      }));
 
+      setDrafts((prev) => [...newDrafts, ...prev]);
       setTopic('');
       setContext('');
       setVariationsInput('1');
       setShowNewDraft(false);
       setStatus(`Generated ${response.drafts.length} draft${response.drafts.length > 1 ? 's' : ''}!`);
+
+      // Select the first draft
+      if (response.drafts.length > 0) {
+        await handleSelectDraft(response.drafts[0].draft_id);
+      }
     } catch (error: any) {
       setStatus(`Error: ${error.message}`);
     } finally {
@@ -219,20 +283,6 @@ export default function Home() {
     }
   };
 
-  const handleTrain = async () => {
-    setLoading(true);
-    setStatus('Triggering training...');
-
-    try {
-      const response = await triggerTraining();
-      setStatus(`Training ${response.status}: ${response.message}`);
-    } catch (error: any) {
-      setStatus(`Error: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleCloseDraft = () => {
     setSelectedDraft(null);
     setEditedText('');
@@ -242,8 +292,6 @@ export default function Home() {
     setShowDiff(false);
     setStatus('');
   };
-
-  const feedbackCount = drafts.filter(d => d.has_feedback).length;
 
   // Loading state
   if (authLoading) {
@@ -272,6 +320,11 @@ export default function Home() {
           <div className="text-right">
             <div className="text-sm text-gray-700 mb-1">
               {user.first_name} {user.last_name} ({user.email})
+              {user.is_admin && (
+                <span className="ml-2 bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-medium">
+                  Admin
+                </span>
+              )}
               <button
                 onClick={logout}
                 className="ml-3 text-blue-600 hover:underline"
@@ -302,9 +355,34 @@ export default function Home() {
         <div className="flex gap-6">
           {/* Left Panel - Drafts List */}
           <div className="w-80 flex-shrink-0">
+            {/* Customer Selector for Admins */}
+            {user.is_admin && customers.length > 0 && (
+              <div className="bg-white rounded-lg shadow p-4 mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Customer
+                </label>
+                <select
+                  value={selectedCustomerId || ''}
+                  onChange={(e) => setSelectedCustomerId(e.target.value)}
+                  className="w-full border rounded px-3 py-2 text-sm"
+                >
+                  {customers.map((customer) => (
+                    <option key={customer.customer_id} value={customer.customer_id}>
+                      {customer.email || customer.first_name
+                        ? `${customer.first_name || ''} ${customer.last_name || ''} (${customer.email || 'No email'})`
+                        : customer.customer_id.substring(0, 20) + '...'}
+                      {' '}({customer.draft_count} drafts)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="bg-white rounded-lg shadow p-4 mb-4">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="font-semibold">Your Drafts</h2>
+                <h2 className="font-semibold">
+                  {user.is_admin ? 'Customer Drafts' : 'Your Drafts'}
+                </h2>
                 <button
                   onClick={() => { setShowNewDraft(true); setSelectedDraft(null); }}
                   className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
@@ -319,59 +397,58 @@ export default function Home() {
                 <div className="text-gray-500 text-sm">No drafts yet. Create your first one!</div>
               ) : (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {drafts.map((draft) => (
-                    <div
-                      key={draft.id}
-                      onClick={() => handleSelectDraft(draft.id)}
-                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                        selectedDraft?.id === draft.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="font-medium text-sm text-gray-800 truncate">
-                        {draft.topic}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1 line-clamp-2">
-                        {draft.text.substring(0, 100)}...
-                      </div>
-                      <div className="flex items-center justify-between mt-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-400">
-                            {new Date(draft.created_at).toLocaleDateString()}
-                          </span>
-                          {draft.temperature && (
-                            <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
-                              T:{draft.temperature.toFixed(1)}
+                  {drafts.map((draft) => {
+                    // Find customer name for display (for admins)
+                    const customer = customers.find(c => c.customer_id === draft.customer_id);
+                    const customerLabel = customer
+                      ? (customer.first_name || customer.email || draft.customer_id.substring(0, 12) + '...')
+                      : draft.customer_id.substring(0, 12) + '...';
+
+                    return (
+                      <div
+                        key={draft.id}
+                        onClick={() => handleSelectDraft(draft.id)}
+                        className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                          selectedDraft?.id === draft.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="font-medium text-sm text-gray-800 truncate">
+                          {draft.topic}
+                        </div>
+                        {user?.is_admin && (
+                          <div className="text-xs text-blue-600 mt-1">
+                            Customer: {customerLabel}
+                          </div>
+                        )}
+                        <div className="text-xs text-gray-500 mt-1 line-clamp-2">
+                          {draft.text.substring(0, 100)}...
+                        </div>
+                        <div className="flex items-center justify-between mt-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400">
+                              {new Date(draft.created_at).toLocaleDateString()}
+                            </span>
+                            {draft.temperature && (
+                              <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
+                                T:{draft.temperature.toFixed(1)}
+                              </span>
+                            )}
+                          </div>
+                          {draft.has_feedback && (
+                            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                              Reviewed
                             </span>
                           )}
                         </div>
-                        {draft.has_feedback && (
-                          <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
-                            Reviewed
-                          </span>
-                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Training Panel */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="font-semibold mb-3">Model Training</h2>
-              <p className="text-xs text-gray-500 mb-3">
-                Train your personalized model after reviewing drafts
-              </p>
-              <button
-                onClick={handleTrain}
-                disabled={loading || feedbackCount < 3}
-                className="w-full bg-purple-600 text-white py-2 px-4 rounded hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
-              >
-                Train Model ({feedbackCount}/3 reviews)
-              </button>
-            </div>
           </div>
 
           {/* Right Panel - Editor or New Draft Form */}
@@ -387,6 +464,31 @@ export default function Home() {
                     Cancel
                   </button>
                 </div>
+
+                {/* Customer selector for admins */}
+                {user?.is_admin && customers.length > 0 && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Create for Customer *
+                    </label>
+                    <select
+                      value={selectedCustomerId || ''}
+                      onChange={(e) => setSelectedCustomerId(e.target.value)}
+                      className="w-full border rounded px-3 py-2"
+                    >
+                      {customers.map((customer) => (
+                        <option key={customer.customer_id} value={customer.customer_id}>
+                          {customer.email || customer.first_name
+                            ? `${customer.first_name || ''} ${customer.last_name || ''} (${customer.email || 'No email'})`
+                            : customer.customer_id.substring(0, 20) + '...'}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Select which customer this draft is for
+                    </p>
+                  </div>
+                )}
 
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Topic *
@@ -431,7 +533,9 @@ export default function Home() {
                   disabled={loading || !topic.trim()}
                   className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 font-medium"
                 >
-                  {loading ? `Generating ${variations} variation${variations > 1 ? 's' : ''}...` : `Generate ${variations} Draft${variations > 1 ? 's' : ''}`}
+                  {loading
+                    ? `Generating ${variations} variation${variations > 1 ? 's' : ''}...`
+                    : `Generate ${variations} Draft${variations > 1 ? 's' : ''}`}
                 </button>
               </div>
             ) : selectedDraft ? (

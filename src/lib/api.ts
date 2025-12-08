@@ -33,6 +33,8 @@ export interface User {
   email: string;
   first_name?: string;
   last_name?: string;
+  customer_id?: string;
+  is_admin: boolean;
 }
 
 export async function getCurrentUser(): Promise<User | null> {
@@ -74,6 +76,18 @@ export interface GenerateRequest {
   topic: string;
   context?: string;
   variations?: number;
+  customer_id?: string; // For marketing managers to generate for specific customer
+}
+
+// SSE event types for streaming draft generation
+export interface DraftEvent {
+  event: 'draft' | 'error' | 'done';
+  draft_id?: string;
+  text?: string;
+  temperature?: number;
+  error?: string;
+  index?: number;
+  total?: number;
 }
 
 export interface GeneratedDraft {
@@ -118,6 +132,86 @@ export async function generatePost(request: GenerateRequest): Promise<GenerateRe
   return response.json();
 }
 
+// SSE streaming version of draft generation
+export function generatePostStream(
+  request: GenerateRequest,
+  onDraft: (event: DraftEvent) => void,
+  onError: (error: string) => void,
+  onDone: () => void
+): () => void {
+  const token = getToken();
+  const params = new URLSearchParams({
+    topic: request.topic,
+    variations: String(request.variations || 1),
+  });
+  if (request.context) params.set('context', request.context);
+  if (request.customer_id) params.set('customer_id', request.customer_id);
+
+  const url = `${API_URL}/generate/stream?${params.toString()}`;
+
+  // Use fetch with ReadableStream for SSE with auth headers
+  const controller = new AbortController();
+
+  fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'text/event-stream',
+    },
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Stream failed' }));
+        onError(error.detail || 'Generation failed');
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        onError('No response body');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6)) as DraftEvent;
+              if (data.event === 'error') {
+                onError(data.error || 'Unknown error');
+              } else if (data.event === 'done') {
+                onDone();
+              } else if (data.event === 'draft') {
+                onDraft(data);
+              }
+            } catch {
+              // Skip malformed JSON
+            }
+          }
+        }
+      }
+      onDone();
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') {
+        onError(err.message || 'Stream error');
+      }
+    });
+
+  // Return cleanup function
+  return () => controller.abort();
+}
+
 export async function submitFeedback(request: FeedbackRequest): Promise<FeedbackResponse> {
   const response = await fetch(`${API_URL}/feedback`, {
     method: 'POST',
@@ -144,11 +238,27 @@ export async function triggerTraining(): Promise<TrainResponse> {
   return response.json();
 }
 
-export async function getCustomers(): Promise<{ customers: { customer_id: string; feedback_count: number }[] }> {
+export interface Customer {
+  customer_id: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  draft_count: number;
+}
+
+export async function getCustomers(): Promise<{ customers: Customer[] }> {
   const response = await fetch(`${API_URL}/customers`, {
     headers: authHeaders(),
   });
   if (!response.ok) throw new Error('Failed to fetch customers');
+  return response.json();
+}
+
+export async function getDraftsForCustomer(customerId: string): Promise<{ drafts: Draft[] }> {
+  const response = await fetch(`${API_URL}/drafts?customer_id=${encodeURIComponent(customerId)}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error('Failed to fetch drafts');
   return response.json();
 }
 
@@ -167,6 +277,7 @@ export async function checkHealth(): Promise<{ status: string; database: string 
 
 export interface Draft {
   id: string;
+  customer_id: string;
   topic: string;
   text: string;
   created_at: string;
