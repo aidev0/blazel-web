@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getTrainingData,
   trainAdapter,
   getAdapters,
   activateAdapter,
-  getTrainingJobStatus,
   Adapter,
   TrainingData,
 } from '@/lib/api';
@@ -15,14 +14,23 @@ interface TrainingPanelProps {
   customerId: string;
   customerName?: string;
   onStatusChange?: (status: string) => void;
+  // Lifted state from parent for persistence across tab switches
+  trainingJobId?: string | null;
+  trainingStatus?: string | null;
+  onTrainingStart?: (jobId: string, customerId: string) => void;
 }
 
-export default function TrainingPanel({ customerId, customerName, onStatusChange }: TrainingPanelProps) {
+export default function TrainingPanel({
+  customerId,
+  customerName,
+  onStatusChange,
+  trainingJobId,
+  trainingStatus,
+  onTrainingStart,
+}: TrainingPanelProps) {
   const [trainingData, setTrainingData] = useState<TrainingData | null>(null);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [loading, setLoading] = useState(false);
-  const [trainingJobId, setTrainingJobId] = useState<string | null>(null);
-  const [trainingStatus, setTrainingStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Training parameters
@@ -48,34 +56,15 @@ export default function TrainingPanel({ customerId, customerName, onStatusChange
     loadData();
   }, [loadData]);
 
-  // Poll for training job status
+  // Reload adapters when training completes (trainingJobId becomes null)
+  const prevJobIdRef = useRef(trainingJobId);
   useEffect(() => {
-    if (!trainingJobId) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const status = await getTrainingJobStatus(trainingJobId);
-        setTrainingStatus(status.progress || status.status);
-
-        if (status.status === 'completed') {
-          clearInterval(interval);
-          setTrainingJobId(null);
-          setTrainingStatus(null);
-          onStatusChange?.('Training completed! Adapter saved.');
-          loadData(); // Reload adapters
-        } else if (status.status === 'failed') {
-          clearInterval(interval);
-          setTrainingJobId(null);
-          setError(status.error || 'Training failed');
-          onStatusChange?.('Training failed');
-        }
-      } catch (err) {
-        // Ignore polling errors
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [trainingJobId, loadData, onStatusChange]);
+    if (prevJobIdRef.current && !trainingJobId) {
+      // Training just completed, reload adapters
+      loadData();
+    }
+    prevJobIdRef.current = trainingJobId;
+  }, [trainingJobId, loadData]);
 
   const handleTrain = async () => {
     if (!customerId || !trainingData || trainingData.count < 3) return;
@@ -88,8 +77,8 @@ export default function TrainingPanel({ customerId, customerName, onStatusChange
         customer_id: customerId,
         epochs,
       });
-      setTrainingJobId(result.job_id);
-      setTrainingStatus('Training started...');
+      // Notify parent to start tracking the job
+      onTrainingStart?.(result.job_id, customerId);
       onStatusChange?.(`Training started with ${result.feedback_count} samples`);
     } catch (err: any) {
       setError(err.message);

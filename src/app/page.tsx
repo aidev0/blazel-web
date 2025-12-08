@@ -17,10 +17,14 @@ import {
   getCurrentUser,
   login,
   logout,
+  getTrainingJobStatus,
+  getAdapters,
+  activateAdapter,
   User,
   Draft,
   DraftDetail,
   Customer,
+  Adapter,
 } from '@/lib/api';
 
 export default function Home() {
@@ -55,6 +59,16 @@ export default function Home() {
   const [status, setStatus] = useState<string>('');
   const [apiHealth, setApiHealth] = useState<string>('checking...');
   const [showDiff, setShowDiff] = useState(true);
+  const [activeTab, setActiveTab] = useState<'drafts' | 'training' | 'adapters'>('drafts');
+
+  // Training job state (lifted from TrainingPanel for persistence)
+  const [trainingJobId, setTrainingJobId] = useState<string | null>(null);
+  const [trainingStatus, setTrainingStatus] = useState<string | null>(null);
+  const [trainingCustomerId, setTrainingCustomerId] = useState<string | null>(null);
+
+  // Adapters state
+  const [adapters, setAdapters] = useState<Adapter[]>([]);
+  const [adaptersLoading, setAdaptersLoading] = useState(false);
 
   // Handle auth callback and check auth state
   useEffect(() => {
@@ -132,6 +146,56 @@ export default function Home() {
       .catch(() => setApiHealth('Disconnected'));
   }, []);
 
+  // Load adapters when Adapters tab is selected or customer changes
+  useEffect(() => {
+    const loadAdapters = async () => {
+      const customerId = user?.is_admin ? selectedCustomerId : user?.customer_id;
+      if (!customerId || activeTab !== 'adapters') return;
+
+      setAdaptersLoading(true);
+      try {
+        const res = await getAdapters(customerId);
+        setAdapters(res.adapters);
+      } catch (err: any) {
+        setStatus(`Error loading adapters: ${err.message}`);
+      } finally {
+        setAdaptersLoading(false);
+      }
+    };
+
+    loadAdapters();
+  }, [activeTab, selectedCustomerId, user?.is_admin, user?.customer_id]);
+
+  // Poll for training job status (persists across tab switches)
+  useEffect(() => {
+    if (!trainingJobId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await getTrainingJobStatus(trainingJobId);
+        setTrainingStatus(status.progress || status.status);
+
+        if (status.status === 'completed') {
+          clearInterval(interval);
+          setTrainingJobId(null);
+          setTrainingStatus(null);
+          setTrainingCustomerId(null);
+          setStatus('Training completed! Adapter saved.');
+        } else if (status.status === 'failed') {
+          clearInterval(interval);
+          setTrainingJobId(null);
+          setTrainingStatus(null);
+          setTrainingCustomerId(null);
+          setStatus(`Training failed: ${status.error || 'Unknown error'}`);
+        }
+      } catch (err) {
+        // Ignore polling errors
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [trainingJobId]);
+
   const loadDrafts = async () => {
     setDraftsLoading(true);
     try {
@@ -194,7 +258,7 @@ export default function Home() {
     setStatus(`Generating ${variations} variation${variations > 1 ? 's' : ''}...`);
 
     // Use selected customer for admins, otherwise use user's own customer_id
-    const targetCustomerId = user?.is_admin ? selectedCustomerId : (user?.customer_id || user?.workos_user_id);
+    const targetCustomerId = user?.is_admin ? selectedCustomerId : user?.customer_id;
 
     try {
       const response = await generatePost({
@@ -339,12 +403,34 @@ export default function Home() {
           </div>
         </div>
 
+        {/* Persistent Training Status Banner */}
+        {trainingJobId && (
+          <div className="mb-4 p-3 bg-purple-100 border border-purple-300 rounded-lg flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <svg className="animate-spin h-5 w-5 text-purple-600" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <div>
+                <div className="font-medium text-purple-800">Training in Progress</div>
+                <div className="text-sm text-purple-600">{trainingStatus || 'Starting...'}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab('training')}
+              className="text-sm text-purple-700 hover:text-purple-900 underline"
+            >
+              View Details
+            </button>
+          </div>
+        )}
+
         {status && (
           <div
             className={`mb-4 p-3 rounded text-sm ${
               status.includes('Error')
                 ? 'bg-red-100 text-red-700'
-                : status.includes('submitted') || status.includes('generated')
+                : status.includes('submitted') || status.includes('generated') || status.includes('completed')
                 ? 'bg-green-100 text-green-700'
                 : 'bg-blue-100 text-blue-700'
             }`}
@@ -353,6 +439,207 @@ export default function Home() {
           </div>
         )}
 
+        {/* Tabs - visible to all users */}
+        <div className="mb-6 border-b border-gray-200">
+          <nav className="flex gap-4">
+            <button
+              onClick={() => setActiveTab('drafts')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'drafts'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Drafts
+            </button>
+            <button
+              onClick={() => setActiveTab('training')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'training'
+                  ? 'border-purple-500 text-purple-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Training
+            </button>
+            <button
+              onClick={() => setActiveTab('adapters')}
+              className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'adapters'
+                  ? 'border-green-500 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Adapters
+            </button>
+          </nav>
+        </div>
+
+        {/* Training Tab Content */}
+        {activeTab === 'training' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Customer Selector (admin) or own training (user) */}
+            {user.is_admin ? (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-lg font-semibold mb-4">Select Customer</h2>
+                {customers.length === 0 ? (
+                  <p className="text-gray-500">No customers found</p>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {customers.map((customer) => (
+                      <div
+                        key={customer.customer_id}
+                        onClick={() => setSelectedCustomerId(customer.customer_id)}
+                        className={`p-4 rounded-lg border cursor-pointer transition-colors ${
+                          selectedCustomerId === customer.customer_id
+                            ? 'border-purple-500 bg-purple-50'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="font-medium">
+                          {customer.first_name || customer.last_name
+                            ? `${customer.first_name || ''} ${customer.last_name || ''}`.trim()
+                            : 'Unknown'}
+                        </div>
+                        <div className="text-sm text-gray-500">{customer.email || 'No email'}</div>
+                        <div className="text-xs text-gray-400 mt-1">{customer.draft_count} drafts</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {/* Training Panel */}
+            {(user.is_admin ? selectedCustomerId : user.customer_id) ? (
+              <TrainingPanel
+                customerId={user.is_admin ? selectedCustomerId! : user.customer_id!}
+                customerName={user.is_admin
+                  ? (customers.find(c => c.customer_id === selectedCustomerId)?.first_name ||
+                     customers.find(c => c.customer_id === selectedCustomerId)?.email)
+                  : user.first_name}
+                onStatusChange={setStatus}
+                trainingJobId={trainingJobId}
+                trainingStatus={trainingStatus}
+                onTrainingStart={(jobId, custId) => {
+                  setTrainingJobId(jobId);
+                  setTrainingStatus('Training started...');
+                  setTrainingCustomerId(custId);
+                }}
+              />
+            ) : (
+              <div className="bg-white rounded-lg shadow p-6 flex items-center justify-center">
+                <p className="text-gray-500">
+                  {user.is_admin ? 'Select a customer to view training options' : 'Loading...'}
+                </p>
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'adapters' ? (
+          /* Adapters Tab Content */
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Customer Selector (admin) or show own adapters (user) */}
+            {user.is_admin ? (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-lg font-semibold mb-4">Select Customer</h2>
+                {customers.length === 0 ? (
+                  <p className="text-gray-500">No customers found</p>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {customers.map((customer) => (
+                      <div
+                        key={customer.customer_id}
+                        onClick={() => setSelectedCustomerId(customer.customer_id)}
+                        className={`p-4 rounded-lg border cursor-pointer transition-colors ${
+                          selectedCustomerId === customer.customer_id
+                            ? 'border-green-500 bg-green-50'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="font-medium">
+                          {customer.first_name || customer.last_name
+                            ? `${customer.first_name || ''} ${customer.last_name || ''}`.trim()
+                            : 'Unknown'}
+                        </div>
+                        <div className="text-sm text-gray-500">{customer.email || 'No email'}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {/* Adapters List */}
+            <div className={`bg-white rounded-lg shadow p-6 ${!user.is_admin ? 'lg:col-span-2' : ''}`}>
+              <h2 className="text-lg font-semibold mb-4">
+                {user.is_admin ? 'Customer Adapters' : 'Your Adapters'}
+              </h2>
+              {adaptersLoading ? (
+                <p className="text-gray-500">Loading adapters...</p>
+              ) : adapters.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-500 mb-2">No adapters trained yet</p>
+                  <p className="text-sm text-gray-400">
+                    Go to the Training tab to train a LoRA adapter from your feedback
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {adapters.map((adapter) => (
+                    <div
+                      key={adapter.id}
+                      className={`p-4 rounded-lg border ${
+                        adapter.is_active
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-medium">
+                            Version {adapter.version}
+                            {adapter.is_active && (
+                              <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-500 mt-1">
+                            {adapter.training_samples} samples, {adapter.epochs} epochs
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            {new Date(adapter.created_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                        {!adapter.is_active && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const result = await activateAdapter(adapter.id);
+                                setStatus(result.message);
+                                // Reload adapters
+                                const customerId = user.is_admin ? selectedCustomerId : user.customer_id;
+                                if (customerId) {
+                                  const res = await getAdapters(customerId);
+                                  setAdapters(res.adapters);
+                                }
+                              } catch (err: any) {
+                                setStatus(`Error: ${err.message}`);
+                              }
+                            }}
+                            className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200"
+                          >
+                            Activate
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
         <div className="flex gap-6">
           {/* Left Panel - Drafts List */}
           <div className="w-80 flex-shrink-0">
@@ -449,16 +736,6 @@ export default function Home() {
                 </div>
               )}
             </div>
-
-            {/* Training Panel for Admins */}
-            {user.is_admin && selectedCustomerId && (
-              <TrainingPanel
-                customerId={selectedCustomerId}
-                customerName={customers.find(c => c.customer_id === selectedCustomerId)?.first_name ||
-                             customers.find(c => c.customer_id === selectedCustomerId)?.email}
-                onStatusChange={setStatus}
-              />
-            )}
 
           </div>
 
@@ -702,6 +979,7 @@ export default function Home() {
             )}
           </div>
         </div>
+        )}
       </div>
     </main>
   );
