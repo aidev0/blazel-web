@@ -20,6 +20,7 @@ import {
   getTrainingJobStatus,
   getAdapters,
   activateAdapter,
+  deactivateAdapter,
   User,
   Draft,
   DraftDetail,
@@ -571,9 +572,12 @@ export default function Home() {
 
             {/* Adapters List */}
             <div className={`bg-white rounded-lg shadow p-6 ${!user.is_admin ? 'lg:col-span-2' : ''}`}>
-              <h2 className="text-lg font-semibold mb-4">
+              <h2 className="text-lg font-semibold mb-2">
                 {user.is_admin ? 'Customer Adapters' : 'Your Adapters'}
               </h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Select which adapter to use for inference, or choose "None" to use the base model only.
+              </p>
               {adaptersLoading ? (
                 <p className="text-gray-500">Loading adapters...</p>
               ) : adapters.length === 0 ? (
@@ -584,57 +588,98 @@ export default function Home() {
                   </p>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {adapters.map((adapter) => (
+                <div className="space-y-2">
+                  {/* Adapter options - sorted by version descending (newest first) */}
+                  {[...adapters].sort((a, b) => b.version - a.version).map((adapter) => (
                     <div
                       key={adapter.id}
-                      className={`p-4 rounded-lg border ${
+                      onClick={async () => {
+                        if (!adapter.is_active) {
+                          try {
+                            const result = await activateAdapter(adapter.id);
+                            setStatus(result.message);
+                            // Reload adapters
+                            const customerId = user.is_admin ? selectedCustomerId : user.customer_id;
+                            if (customerId) {
+                              const res = await getAdapters(customerId);
+                              setAdapters(res.adapters);
+                            }
+                          } catch (err: any) {
+                            setStatus(`Error: ${err.message}`);
+                          }
+                        }
+                      }}
+                      className={`p-4 rounded-lg border cursor-pointer transition-colors ${
                         adapter.is_active
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200'
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                       }`}
                     >
-                      <div className="flex justify-between items-start">
-                        <div>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                          adapter.is_active
+                            ? 'border-blue-500'
+                            : 'border-gray-300'
+                        }`}>
+                          {adapter.is_active && (
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          )}
+                        </div>
+                        <div className="flex-1">
                           <div className="font-medium">
                             Version {adapter.version}
-                            {adapter.is_active && (
-                              <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
-                                Active
-                              </span>
-                            )}
                           </div>
-                          <div className="text-sm text-gray-500 mt-1">
+                          <div className="text-sm text-gray-500">
                             {adapter.training_samples} samples, {adapter.epochs} epochs
-                          </div>
-                          <div className="text-xs text-gray-400 mt-1">
+                            <span className="mx-2">•</span>
                             {new Date(adapter.created_at).toLocaleDateString()}
                           </div>
                         </div>
-                        {!adapter.is_active && (
-                          <button
-                            onClick={async () => {
-                              try {
-                                const result = await activateAdapter(adapter.id);
-                                setStatus(result.message);
-                                // Reload adapters
-                                const customerId = user.is_admin ? selectedCustomerId : user.customer_id;
-                                if (customerId) {
-                                  const res = await getAdapters(customerId);
-                                  setAdapters(res.adapters);
-                                }
-                              } catch (err: any) {
-                                setStatus(`Error: ${err.message}`);
-                              }
-                            }}
-                            className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200"
-                          >
-                            Activate
-                          </button>
-                        )}
                       </div>
                     </div>
                   ))}
+
+                  {/* None option - at the bottom */}
+                  <div
+                    onClick={async () => {
+                      const activeAdapter = adapters.find(a => a.is_active);
+                      if (activeAdapter) {
+                        try {
+                          const result = await deactivateAdapter(activeAdapter.id);
+                          setStatus(result.message);
+                          // Reload adapters
+                          const customerId = user.is_admin ? selectedCustomerId : user.customer_id;
+                          if (customerId) {
+                            const res = await getAdapters(customerId);
+                            setAdapters(res.adapters);
+                          }
+                        } catch (err: any) {
+                          setStatus(`Error: ${err.message}`);
+                        }
+                      }
+                    }}
+                    className={`p-4 rounded-lg border cursor-pointer transition-colors ${
+                      !adapters.some(a => a.is_active)
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        !adapters.some(a => a.is_active)
+                          ? 'border-blue-500'
+                          : 'border-gray-300'
+                      }`}>
+                        {!adapters.some(a => a.is_active) && (
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-medium">None (Base Model)</div>
+                        <div className="text-sm text-gray-500">Use the default model without any LoRA adapter</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

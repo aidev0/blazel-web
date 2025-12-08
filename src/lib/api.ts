@@ -418,6 +418,18 @@ export async function activateAdapter(adapterId: string): Promise<{ status: stri
   return response.json();
 }
 
+export async function deactivateAdapter(adapterId: string): Promise<{ status: string; message: string }> {
+  const response = await fetch(`${API_URL}/adapters/${adapterId}/deactivate`, {
+    method: 'PUT',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to deactivate adapter');
+  }
+  return response.json();
+}
+
 export async function getTrainingJobStatus(jobId: string): Promise<TrainingJobStatus> {
   const response = await fetch(`${API_URL}/training-jobs/${jobId}`, {
     headers: authHeaders(),
