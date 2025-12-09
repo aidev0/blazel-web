@@ -217,6 +217,7 @@ export default function Home() {
       setSelectedDraft(draft);
       setEditedText(draft.feedback?.edited || draft.text);
       setComments(draft.feedback?.comments || []);
+      setNewComment('');
       setInlineComments([]);
       // Load existing rating - handle both string and null cases
       const existingRating = draft.feedback?.rating;
